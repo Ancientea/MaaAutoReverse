@@ -1,0 +1,20 @@
+{
+    "AutoReverseEntry": {
+        "next": [
+            "AutoReverseLoop"
+        ]
+    },
+    "AutoReverseLoop": {
+        "recognition": "DirectHit",
+        "action": "Custom",
+        "custom_action": "AutoReverseTick",
+        "custom_action_param": {
+            "name": "default"
+        },
+        "next": [
+            "AutoReverseLoop"
+        ],
+        "rate_limit": 200
+    }
+}
+

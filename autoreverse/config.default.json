@@ -1,0 +1,18 @@
+{
+  "item_list": [
+    "人事部文档"
+  ],
+  "operator_list": [],
+  "buy_only_operator_list": [],
+  "six_star_list": [],
+  "ocr_correction_map": {
+    "铜": "锏",
+    "湖": "溯"
+  },
+  "change_threshold": 5.0,
+  "shop_refresh_change_threshold": 15.0,
+  "stable_threshold": 2.0,
+  "stable_timeout": 2.0,
+  "post_action_refresh_wait": 0.4,
+  "sell_click_wait": 0.03
+}
