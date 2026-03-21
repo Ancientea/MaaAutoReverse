@@ -76,10 +76,11 @@ def classify_action(
     if is_list_match(card.name, operator_list, correction_map):
         return 2
 
-    if card.price == 1:
-        return 3
+    # In skip list => no action, regardless of price.
+    if is_list_match(card.name, six_star_list, correction_map):
+        return None
 
-    if card.price == 0 and not is_list_match(card.name, six_star_list, correction_map):
+    if card.price in (0, 1):
         return 3
 
     return None

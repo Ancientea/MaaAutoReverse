@@ -72,8 +72,11 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 # 设置控制台输出编码为 UTF-8，防止中文乱码（Windows 特有）
 if sys.platform.startswith('win'):
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    # PyInstaller --windowed 下 stdout/stderr 可能为 None，需先判空再包装。
+    if getattr(sys.stdout, 'buffer', None) is not None:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    if getattr(sys.stderr, 'buffer', None) is not None:
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # 旧版本地 OCR 已移除，当前仅使用 Maa 运行器内的 OCR。
 
@@ -237,7 +240,7 @@ class ROIProcessorApp:
             )
             chk.grid(row=idx // 8, column=idx % 8, sticky="w", padx=8, pady=4)
 
-        self.txt_six = create_text_area(cfg_frame, "0费不买干员:", default_six, height=3)
+        self.txt_six = create_text_area(cfg_frame, "不处理名单:", default_six, height=3)
 
         self.status_label = tk.Label(top_frame, text="Maa 运行器就绪", fg="green")
         self.status_label.pack(side=tk.LEFT, padx=10)
