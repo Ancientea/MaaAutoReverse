@@ -66,7 +66,8 @@ def classify_action(
     six_star_list: List[str],
     correction_map: Dict[str, str],
 ) -> Optional[int]:
-    # 0: item, 1: buy only operator, 2: specific buy/sell, 3: generic buy/sell
+
+    # 0: 购买道具, 1: 购买保留干员, 2: 购买倒转干员, 3: 0、1费正常倒转
     if card.slot == 6:
         return 0 if is_list_match(card.name, item_list, correction_map) else None
 
@@ -76,7 +77,7 @@ def classify_action(
     if is_list_match(card.name, operator_list, correction_map):
         return 2
 
-    # In skip list => no action, regardless of price.
+    # 命中不处理名单时，直接跳过该干员（与费用无关）。
     if is_list_match(card.name, six_star_list, correction_map):
         return None
 
