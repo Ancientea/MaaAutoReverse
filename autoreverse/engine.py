@@ -49,7 +49,7 @@ ROI_TEMPLATES = {
             (0.2052, 0.9556, 0.0818, 0.0250),
         ],
         "MAX_CARD_ROI": (0.3625, 0.7037, 0.2740, 0.0435),
-        "HAND_AREA_ROI": (0.1250, 0.6324, 0.6594, 0.1046),
+        "HAND_AREA_ROI": (0.1234, 0.5907, 0.6599, 0.1102),
         "SHOP_DISPLAY_ROI": (0.1901, 0.7685, 0.6844, 0.2204),
     },
     "100%": {
@@ -69,7 +69,7 @@ ROI_TEMPLATES = {
             (0.1172, 0.9500, 0.0896, 0.0296),
         ],
         "MAX_CARD_ROI": (0.3460, 0.6687, 0.3073, 0.0514),
-        "HAND_AREA_ROI": (0.1250, 0.6324, 0.6594, 0.1046),
+        "HAND_AREA_ROI": (0.1240, 0.5824, 0.6594, 0.0889),
         "SHOP_DISPLAY_ROI": (0.0995, 0.7435, 0.7599, 0.2444),
     }
 }
@@ -439,8 +439,7 @@ class AutoReverseEngine:
 
         num_slots = 10
         slot_width = w_roi / float(num_slots)
-        blur_ksize = (21, 21)
-
+        blur_ksize = (5, 5) 
         max_score = 0
         max_idx = -1
         for i in range(num_slots):
@@ -451,13 +450,85 @@ class AutoReverseEngine:
 
             diff = cv2.absdiff(before_slot, after_slot)
             gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-            _, th = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY)
+            _, th = cv2.threshold(gray, 70, 255, cv2.THRESH_BINARY) # 阈值设为70，可以过滤掉轻微的噪点
             score = cv2.countNonZero(th)
             if score > max_score:
                 max_score = score
                 max_idx = i
 
-        if max_idx == -1 or max_score <= 50:
+        if max_idx == -1 or max_score <= 200:
+            return None
+
+        xs = int(max_idx * slot_width)
+        xe = int((max_idx + 1) * slot_width) if max_idx < num_slots - 1 else w_roi
+        return xs + (xe - xs) / 2.0
+
+    def _find_hand_change_center_test(self, img_before: np.ndarray, img_after: np.ndarray) -> Optional[float]:
+        if img_before is None or img_after is None:
+            return None
+        if img_before.shape != img_after.shape:
+            img_before = cv2.resize(img_before, (img_after.shape[1], img_after.shape[0]))
+
+        h_roi, w_roi = img_after.shape[:2]
+        if h_roi == 0 or w_roi == 0:
+            return None
+
+        num_slots = 10
+        slot_width = w_roi / float(num_slots)
+        blur_ksize = (5, 5) # 你正在不断测试的卷积核大小
+        color_threshold = 70 # 你刚才设定的色差阈值
+        score_threshold = 200 # 有效变动像素量及格线
+
+        # 对一整张手牌区图片进行统一步骤
+        blurred_before = cv2.GaussianBlur(img_before, blur_ksize, 0)
+        blurred_after = cv2.GaussianBlur(img_after, blur_ksize, 0)
+        
+        diff = cv2.absdiff(blurred_before, blurred_after)
+        gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+        _, th = cv2.threshold(gray, color_threshold, 255, cv2.THRESH_BINARY)
+        
+        scores = []
+        max_score = 0
+        max_idx = -1
+        
+        # 将黑白阈值图转回BGR，方便我们在上面画绿色的格子和红色的数字
+        debug_th = cv2.cvtColor(th, cv2.COLOR_GRAY2BGR)
+        
+        for i in range(num_slots):
+            xs = int(i * slot_width)
+            xe = int((i + 1) * slot_width) if i < num_slots - 1 else w_roi
+            
+            # 从整图中截取出这一列去计算非0像素数量
+            slice_th = th[:, xs:xe]
+            score = cv2.countNonZero(slice_th)
+            scores.append(score)
+            if score > max_score:
+                max_score = score
+                max_idx = i
+                
+            # 在调试图上画出边界线和写上分数
+            cv2.rectangle(debug_th, (xs, 0), (xe, h_roi), (0, 255, 0), 1)
+            cv2.putText(debug_th, str(score), (xs + 2, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+        self.log(f"【调试】10个区域计算出的有效变动像素量(Score): {scores}")
+
+        # 拼图展示给用户看 (3行2列)
+        # 提示用户这些步骤分别长什么样子
+        # 第一排: 购买前的原图 vs 购买后的原图
+        row1 = np.hstack((img_before, img_after))
+        # 第二排: 高斯模糊处理后的两张图
+        row2 = np.hstack((blurred_before, blurred_after))
+        # 第三排: 这两者的相减图(AbsDiff) vs 得分最高列统计出来的黑白阈值图
+        row3 = np.hstack((diff, debug_th))
+        
+        # 把三行合成一张巨大的画布
+        canvas = np.vstack((row1, row2, row3))
+        
+        cv2.imshow(f"Hand Area Debug | Threshold: {color_threshold} | Press ANY KEY to continue", canvas)
+        cv2.waitKey(0) # 0 代表一直暂停死等，直到你在图片窗口按任意键
+        cv2.destroyAllWindows()
+
+        if max_idx == -1 or max_score <= score_threshold:
             return None
 
         xs = int(max_idx * slot_width)
@@ -523,7 +594,7 @@ class AutoReverseEngine:
         h, w = after_frame.shape[:2]
         hx, hy, hw, hh = hand_area_roi
         abs_x = int(hx * w + center_x)
-        abs_y = int((hy + hh / 2.0) * h)
+        abs_y = int((hy + hh) * h)
 
         controller.post_click(abs_x, abs_y).wait()
         time.sleep(cfg.sell_click_wait)  # 选中待售卡片后等待输入焦点稳定
@@ -534,7 +605,10 @@ class AutoReverseEngine:
 
         # self.log(f"操作时延{cfg.post_action_refresh_wait:g}s")
         time.sleep(cfg.post_action_refresh_wait)  # 卖出后统一等待商店刷新动画
-        shop_after_sell = self._crop(controller.post_screencap().wait().get(), shop_display_roi)
+
+        after_sell_frame = controller.post_screencap().wait().get()
+        shop_after_sell = self._crop(after_sell_frame, shop_display_roi)
+        hand_full_after_sell = self._is_hand_full(after_sell_frame)
         refreshed_sell, changed_sell, checked_sell = self.detector.eval_shop_refresh(
             shop_after,
             shop_after_sell,
@@ -544,11 +618,12 @@ class AutoReverseEngine:
         self.log(
             "售卖后刷新检查: "
             f"商品{slot}号, 商店改变{changed_sell}/{checked_sell}, "
-            f"商店是否刷新={refreshed_sell}"
+            f"商店是否刷新={refreshed_sell}, "
+            f"售卖后手牌区是否满={hand_full_after_sell}"
         )
         if refreshed_sell:
-            if hand_full_after_buy:
-                self.log("请注意手牌区管理，可用空间只剩一格")
+            if hand_full_after_sell:
+                self.log("售卖后检测到手牌区已满，请注意手牌管理")
                 return False
             self.log("售卖后检测到商店刷新")
             return True
