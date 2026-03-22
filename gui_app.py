@@ -586,15 +586,30 @@ class ROIProcessorApp:
             messagebox.showerror("启动失败", str(e))
 
     def stop_auto_reverse(self):
-        try:
-            self.auto_trader.stop()
-            self.btn_auto_reverse.config(text="启动自动倒转 (F8)", bg="#dddddd")
-            self.btn_refresh_keep.config(text="干员道具刷新保留 (F9)", bg="#dddddd")
-            self.btn_scan_test.config(state=tk.NORMAL)
-            self.update_status("自动倒转已停止", error=False)
-        except Exception as e:
-            self.update_status(f"停止失败: {e}", error=True)
-            messagebox.showerror("停止失败", str(e))
+        self.update_status("正在停止任务，请稍候...", error=False)
+        self.btn_auto_reverse.config(state=tk.DISABLED)
+        self.btn_refresh_keep.config(state=tk.DISABLED)
+        self.btn_scan_test.config(state=tk.DISABLED)
+
+        def _stop_worker():
+            try:
+                self.auto_trader.stop()
+                def _on_stopped():
+                    self.btn_auto_reverse.config(text="启动自动倒转 (F8)", bg="#dddddd", state=tk.NORMAL)
+                    self.btn_refresh_keep.config(text="干员道具刷新保留 (F9)", bg="#dddddd", state=tk.NORMAL)
+                    self.btn_scan_test.config(state=tk.NORMAL)
+                    self.update_status("自动倒转已停止", error=False)
+                self.root.after(0, _on_stopped)
+            except Exception as e:
+                def _on_error():
+                    self.btn_auto_reverse.config(state=tk.NORMAL)
+                    self.btn_refresh_keep.config(state=tk.NORMAL)
+                    self.btn_scan_test.config(state=tk.NORMAL)
+                    self.update_status(f"停止失败: {e}", error=True)
+                    messagebox.showerror("停止失败", str(e))
+                self.root.after(0, _on_error)
+
+        threading.Thread(target=_stop_worker, daemon=True).start()
 
     def refresh_windows(self):
         # 过滤掉不可见或标题为空的窗口
