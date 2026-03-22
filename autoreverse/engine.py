@@ -616,9 +616,10 @@ class AutoReverseEngine:
         if manual_refresh:
             self.log("检测到 D 键，立即执行新一轮识别")
 
+        # 仅截取商店区域比准变动，防止全屏的动画特效让防沉睡机制失效
         changed = manual_refresh or self.last_shop_img is None or self.detector.has_image_changed(
-            self.last_shop_img,
-            frame,
+            self._crop(self.last_shop_img, ROI_TEMPLATES[cfg.ui_scale]["SHOP_DISPLAY_ROI"]) if self.last_shop_img is not None else None,
+            self._crop(frame, ROI_TEMPLATES[cfg.ui_scale]["SHOP_DISPLAY_ROI"]),
             threshold=cfg.change_threshold,
         )
         if not changed:
