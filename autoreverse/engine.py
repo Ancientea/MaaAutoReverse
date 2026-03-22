@@ -90,6 +90,9 @@ class AutoReverseConfig:
     sell_click_wait: float = 0.03
     refresh_keep_mode: bool = False
     ui_scale: str = "90%"
+    double_click_interval: float = 0.01
+    stable_poll_interval: float = 0.1
+    action_interval: float = 0.1
 
     @staticmethod
     def from_json(path: Path) -> "AutoReverseConfig":
@@ -108,6 +111,9 @@ class AutoReverseConfig:
             sell_click_wait=float(data.get("sell_click_wait", 0.03)),
             refresh_keep_mode=bool(data.get("refresh_keep_mode", False)),
             ui_scale=data.get("ui_scale", "90%"),
+            double_click_interval=float(data.get("double_click_interval", 0.01)),
+            stable_poll_interval=float(data.get("stable_poll_interval", 0.1)),
+            action_interval=float(data.get("action_interval", 0.1)),
         )
 
 
@@ -143,13 +149,14 @@ class ShopChangeDetector:
         capture_func: Callable[[], np.ndarray],
         timeout: float = 2.0,
         threshold: float = 2.0,
+        poll_interval: float = 0.1,
     ) -> np.ndarray:
         """等待画面稳定：在超时内轮询截图，直到前后帧变化低于阈值。"""
         last = capture_func()
         start = time.time()
 
         while time.time() - start < timeout:
-            time.sleep(0.1)  # 控制稳定性轮询频率，避免过于频繁截图占用性能
+            time.sleep(poll_interval)  # 控制稳定性轮询频率，避免过于频繁截图占用性能
             curr = capture_func()
             if not self.has_image_changed(last, curr, threshold=threshold):
                 return curr
@@ -345,7 +352,7 @@ class AutoReverseEngine:
 
     def _double_click(self, controller, x: int, y: int):
         controller.post_click(x, y).wait()
-        time.sleep(0.01)
+        time.sleep(self._get_config().double_click_interval)
         controller.post_click(x, y).wait()
 
     def _slot_roi(self, slot: int) -> Tuple[float, float, float, float]:
@@ -583,6 +590,7 @@ class AutoReverseEngine:
             capture_func=lambda: controller.post_screencap().wait().get(),
             timeout=cfg.stable_timeout,
             threshold=cfg.stable_threshold,
+            poll_interval=cfg.stable_poll_interval,
         )
 
         if context is not None:
@@ -599,6 +607,7 @@ class AutoReverseEngine:
             capture_func=lambda: controller.post_screencap().wait().get(),
             timeout=cfg.stable_timeout,
             threshold=cfg.stable_threshold,
+            poll_interval=cfg.stable_poll_interval,
         )
 
         cards, debug = self._scan_cards_with_debug(stable, context=context)
@@ -629,6 +638,7 @@ class AutoReverseEngine:
             capture_func=lambda: controller.post_screencap().wait().get(),
             timeout=cfg.stable_timeout,
             threshold=cfg.stable_threshold,
+            poll_interval=cfg.stable_poll_interval,
         )
 
         if self._is_hand_full(stable):
@@ -697,7 +707,7 @@ class AutoReverseEngine:
                     refresh_triggered = True
                     break
 
-            time.sleep(0.1)  # 每次动作后做短暂节流，避免连续操作过快导致漏输入
+            time.sleep(cfg.action_interval)  # 每次动作后做短暂节流，避免连续操作过快导致漏输入
 
         if refresh_triggered:
             self.log("检测到商店刷新，下一轮立即重新识别")

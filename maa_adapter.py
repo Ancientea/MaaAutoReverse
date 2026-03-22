@@ -45,7 +45,7 @@ class AutoTrader:
 
     @staticmethod
     def _load_runtime_options() -> dict:
-        cfg_path = repo_root / "autoreverse" / "config.default.json"
+        cfg_path = repo_root / "config" / "advanced_config.json"
         defaults = {
             "ocr_correction_map": {"铜": "锏", "湖": "溯"},
             "change_threshold": 5.0,
@@ -55,8 +55,16 @@ class AutoTrader:
             "post_action_refresh_wait": 0.4,
             "sell_click_wait": 0.03,
             "ui_scale": "90%",
+            "double_click_interval": 0.01,
+            "stable_poll_interval": 0.1,
+            "action_interval": 0.1,
         }
         if not cfg_path.exists():
+            try:
+                cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                cfg_path.write_text(json.dumps(defaults, indent=4, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
             return defaults
 
         try:
@@ -73,6 +81,9 @@ class AutoTrader:
             "stable_timeout",
             "post_action_refresh_wait",
             "sell_click_wait",
+            "double_click_interval",
+            "stable_poll_interval",
+            "action_interval",
         ]:
             if key in data:
                 try:
@@ -150,6 +161,9 @@ class AutoTrader:
             sell_click_wait=self._runtime_options["sell_click_wait"],
             refresh_keep_mode=self.refresh_keep_mode,
             ui_scale=self.ui_scale,
+            double_click_interval=self._runtime_options["double_click_interval"],
+            stable_poll_interval=self._runtime_options["stable_poll_interval"],
+            action_interval=self._runtime_options["action_interval"],
         )
 
     def start(self):

@@ -63,24 +63,28 @@ python gui_app.py
 
 ## 配置文件
 
-`config/` 目录下常用文件：
+所有名单及进阶阈值数据均保存在 `config/` 目录下，即便在打包成 `exe` 后也可自由用文本编辑器修改保存。
 
-- `buy_items.json`：保留道具名单
-- `buy_sell_operators.json`：倒转干员名单
-- `buy_only_operators.json`：保留干员名单
-- `six_star_operators.json`：0费不买干员名单
-- `predefined_items.json`：预设道具复选框
-- `predefined_buy_only_operators.json`：预设保留干员复选框
-- `maa_option.json`：GUI 运行选项（窗口等）
+### 1. 名单及界面状态记录
+- `buy_items.json`：**保留道具名单**（遇到这些道具会直接买下囤积）
+- `buy_only_operators.json`：**保留干员名单**（遇到这些干员会买下囤积）
+- `buy_sell_operators.json`：**倒转干员名单**（遇到这些干员会执行：买入 -> 卖出 赚取一费差价）
+- `six_star_operators.json`：**不处理干员名单**（不会购买这些干员，防亏本）
+- `predefined_items.json`：**预设道具列表**（用于构造控制界面下方的快捷勾选框）
+- `predefined_buy_only_operators.json`：**预设保留干员列表**（控制界面快捷勾选框的数据集）
+- `maa_option.json`：**GUI 本地运行选项**（记录你上次选择的游戏窗口句柄等本地状态）
 
-引擎阈值位于 `autoreverse/config.default.json`，如：
-
-- `change_threshold`
-- `shop_refresh_change_threshold`
-- `stable_threshold`
-- `stable_timeout`
-- `post_action_refresh_wait`
-- `sell_click_wait`
+### 2. 高级参数配置 (`advanced_config.json`)
+此文件记录了游戏动画时长检测和操作之间的延迟补偿阈值。如果你观察到程序因网速或模拟器卡顿导致漏识别、连点吞按键，请修改它。
+- `"change_threshold"`: **省流防沉睡阈值**。截取两张图片画面对比时的容差。大于该容差表示有变化需要扫描分析。如果小则证明画面未变化（比如未按刷新），跳过本轮以节省性能。
+- `"shop_refresh_change_threshold"`: **各商品格刷新判定阈值**。买完卡后，未购买的卡槽位发生的变更幅度，超过该阈值被判定为发生了一切大刷新。
+- `"stable_threshold"`: **画面静止稳定判定**。当刚按下刷新或购买等指令时，容错多大区别内的画面闪烁会被认为“画面已安静无动画”。
+- `"stable_timeout"`: **最长稳定超时**（秒）。画面持续闪烁不停时，允许程序死等多少秒后强制继续操作（2.0 = 2秒）。
+- `"post_action_refresh_wait"`: **买/卖单张卡牌后的死等时间**（秒）。预留时间让所买卡牌消失动画播完（0.4 = 0.4秒）。
+- `"sell_click_wait"`: **从选中手上干员** 到 **敲击 X 键卖出之间** 的焦点预设停顿（秒）。
+- `"double_click_interval"`: **鼠标双击购买商品时，两次点击之间** 的连点发包间隔时间（秒）。
+- `"stable_poll_interval"`: **发起各种轮询截图的时间间隔**。默认 0.1 表示每 0.1 秒向游戏截图并比对一次是否刷新/静止。
+- `"action_interval"`: **执行两组相互独立的连续组合动作时相隔的休息时间**（秒）。防由于指令过密导致连击断触。
 
 ## 目录结构（核心）
 
@@ -105,7 +109,7 @@ MaaAutoReverse/
 
 - 确保窗口前台、无覆盖。
 - 检查分辨率比例是否为 16:9。
-- 适当调整 `autoreverse/config.default.json` 中稳定性与刷新阈值。
+- 适当调整 `config/advanced_config.json` 中稳定性与刷新阈值。
 
 ### 快捷键无效
 
