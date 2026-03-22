@@ -43,17 +43,21 @@ def is_list_match(ocr_text: str, target_list: List[str], correction_map: Dict[st
         if not target:
             continue
 
-        if target in normalized:
-            return True
-
         target_nospace = target.replace(" ", "")
-        if target_nospace in normalized_nospace:
+
+        # 完全匹配
+        if target_nospace == normalized_nospace:
             return True
 
-        if len(target_nospace) >= 2:
-            ratio = difflib.SequenceMatcher(None, target_nospace, normalized_nospace).ratio()
-            if ratio >= 0.6:
+        # 限制长度误差不超过1，避免 原始干员 与 异格干员 因为子串包含和高的相似度互相误判
+        if abs(len(target_nospace) - len(normalized_nospace)) <= 1:
+            if target in normalized or target_nospace in normalized_nospace:
                 return True
+
+            if len(target_nospace) >= 2:
+                ratio = difflib.SequenceMatcher(None, target_nospace, normalized_nospace).ratio()
+                if ratio >= 0.6:
+                    return True
 
     return False
 
@@ -68,8 +72,11 @@ def classify_action(
 ) -> Optional[int]:
 
     # 0: 购买道具, 1: 购买保留干员, 2: 购买倒转干员, 3: 0、1费正常倒转
+    if is_list_match(card.name, item_list, correction_map):
+        return 0
+
     if card.slot == 6:
-        return 0 if is_list_match(card.name, item_list, correction_map) else None
+        return None
 
     if is_list_match(card.name, buy_only_operator_list, correction_map):
         return 1

@@ -3,7 +3,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -31,26 +31,48 @@ from .strategy import RecognizedCard, PlannedAction, plan_actions
 
 Rect = Tuple[int, int, int, int]
 
-# 槽位 1-6：数字与名称的 ROI
-ROIS: List[Tuple[float, float, float, float]] = [
-    (0.9381, 0.7481, 0.0240, 0.0342),
-    (0.8141, 0.7704, 0.0100, 0.0232),
-    (0.6990, 0.7704, 0.0100, 0.0232),
-    (0.5839, 0.7704, 0.0100, 0.0232),
-    (0.4688, 0.7704, 0.0100, 0.0232),
-    (0.3537, 0.7704, 0.0100, 0.0232),
-    (0.2386, 0.7704, 0.0100, 0.0232),
-    (0.7807, 0.9556, 0.0818, 0.0250),
-    (0.6656, 0.9556, 0.0818, 0.0250),
-    (0.5505, 0.9556, 0.0818, 0.0250),
-    (0.4354, 0.9556, 0.0818, 0.0250),
-    (0.3203, 0.9556, 0.0818, 0.0250),
-    (0.2052, 0.9556, 0.0818, 0.0250),
-]
-
-MAX_CARD_ROI = (0.3625, 0.7037, 0.2740, 0.0435)
-HAND_AREA_ROI = (0.1250, 0.6324, 0.6594, 0.1046)
-SHOP_DISPLAY_ROI = (0.1901, 0.7685, 0.6844, 0.2204)
+ROI_TEMPLATES = {
+    "90%": {
+        "ROIS": [
+            (0.9381, 0.7481, 0.0240, 0.0342),
+            (0.8141, 0.7704, 0.0100, 0.0232),
+            (0.6990, 0.7704, 0.0100, 0.0232),
+            (0.5839, 0.7704, 0.0100, 0.0232),
+            (0.4688, 0.7704, 0.0100, 0.0232),
+            (0.3537, 0.7704, 0.0100, 0.0232),
+            (0.2386, 0.7704, 0.0100, 0.0232),
+            (0.7807, 0.9556, 0.0818, 0.0250),
+            (0.6656, 0.9556, 0.0818, 0.0250),
+            (0.5505, 0.9556, 0.0818, 0.0250),
+            (0.4354, 0.9556, 0.0818, 0.0250),
+            (0.3203, 0.9556, 0.0818, 0.0250),
+            (0.2052, 0.9556, 0.0818, 0.0250),
+        ],
+        "MAX_CARD_ROI": (0.3625, 0.7037, 0.2740, 0.0435),
+        "HAND_AREA_ROI": (0.1250, 0.6324, 0.6594, 0.1046),
+        "SHOP_DISPLAY_ROI": (0.1901, 0.7685, 0.6844, 0.2204),
+    },
+    "100%": {
+        "ROIS": [
+            (0.9313, 0.7204, 0.0266, 0.0370),
+            (0.7927, 0.7444, 0.0115, 0.0269),
+            (0.6650, 0.7444, 0.0115, 0.0269),
+            (0.5373, 0.7444, 0.0115, 0.0269),
+            (0.4095, 0.7444, 0.0115, 0.0269),
+            (0.2818, 0.7444, 0.0115, 0.0269),
+            (0.1541, 0.7444, 0.0115, 0.0269),
+            (0.7568, 0.9500, 0.0896, 0.0296),
+            (0.6289, 0.9500, 0.0896, 0.0296),
+            (0.5010, 0.9500, 0.0896, 0.0296),
+            (0.3730, 0.9500, 0.0896, 0.0296),
+            (0.2451, 0.9500, 0.0896, 0.0296),
+            (0.1172, 0.9500, 0.0896, 0.0296),
+        ],
+        "MAX_CARD_ROI": (0.3460, 0.6687, 0.3073, 0.0514),
+        "HAND_AREA_ROI": (0.1250, 0.6324, 0.6594, 0.1046),
+        "SHOP_DISPLAY_ROI": (0.0995, 0.7435, 0.7599, 0.2444),
+    }
+}
 
 
 @dataclass
@@ -67,6 +89,7 @@ class AutoReverseConfig:
     post_action_refresh_wait: float = 3
     sell_click_wait: float = 0.03
     refresh_keep_mode: bool = False
+    ui_scale: str = "90%"
 
     @staticmethod
     def from_json(path: Path) -> "AutoReverseConfig":
@@ -84,6 +107,7 @@ class AutoReverseConfig:
             post_action_refresh_wait=float(data.get("post_action_refresh_wait", 1)),
             sell_click_wait=float(data.get("sell_click_wait", 0.03)),
             refresh_keep_mode=bool(data.get("refresh_keep_mode", False)),
+            ui_scale=data.get("ui_scale", "90%"),
         )
 
 
@@ -312,7 +336,8 @@ class AutoReverseEngine:
         return is_orange or is_red
 
     def _is_hand_full(self, img: np.ndarray) -> bool:
-        roi = self._crop(img, MAX_CARD_ROI)
+        max_card_roi = ROI_TEMPLATES[self._get_config().ui_scale]["MAX_CARD_ROI"]
+        roi = self._crop(img, max_card_roi)
         if roi.size == 0:
             return False
         b, g, r, _ = cv2.mean(roi)
@@ -323,51 +348,76 @@ class AutoReverseEngine:
         time.sleep(0.01)
         controller.post_click(x, y).wait()
 
-    @staticmethod
-    def _slot_roi(slot: int) -> Tuple[float, float, float, float]:
-        return ROIS[slot]
+    def _slot_roi(self, slot: int) -> Tuple[float, float, float, float]:
+        return ROI_TEMPLATES[self._get_config().ui_scale]["ROIS"][slot]
 
-    @staticmethod
-    def _slot_text_roi(slot: int) -> Tuple[float, float, float, float]:
-        return ROIS[slot + 6]
+    def _slot_text_roi(self, slot: int) -> Tuple[float, float, float, float]:
+        return ROI_TEMPLATES[self._get_config().ui_scale]["ROIS"][slot + 6]
 
-    @staticmethod
-    def _shop_region_index_from_slot(slot: int) -> Optional[int]:
+    def _shop_region_index_from_slot(self, slot: int) -> Optional[int]:
         if slot < 1 or slot > 6:
             return None
 
         # 将槽位编号映射到“从左到右”的 6 等分区域索引。
+        rois = ROI_TEMPLATES[self._get_config().ui_scale]["ROIS"]
         ordered_slots = sorted(
             range(1, 7),
-            key=lambda s: (ROIS[s][0] + ROIS[s][2] / 2.0, ROIS[s][1] + ROIS[s][3] / 2.0),
+            key=lambda s: (rois[s][0] + rois[s][2] / 2.0, rois[s][1] + rois[s][3] / 2.0),
         )
         region_map = {s: idx for idx, s in enumerate(ordered_slots)}
         return region_map.get(slot)
 
-    def _scan_cards(self, frame_bgr: np.ndarray, context=None) -> List[RecognizedCard]:
-        """扫描 1-6 槽位，识别名称与价格并生成卡片列表。"""
-        if context is None:
-            return []
+    def _scan_cards_with_debug(self, frame_bgr: np.ndarray, context=None) -> Tuple[List[RecognizedCard], Dict[str, Any]]:
+        """扫描 1-6 槽位，返回识别卡片与调试信息（整图+ROI+OCR）。"""
+        debug: Dict[str, Any] = {
+            "frame_bgr": frame_bgr.copy() if frame_bgr is not None else None,
+            "slots": [],
+        }
+        if context is None or frame_bgr is None:
+            return [], debug
 
         h, w = frame_bgr.shape[:2]
         if h == 0 or w == 0:
-            return []
+            return [], debug
 
         cards: List[RecognizedCard] = []
         for slot in range(1, 7):
             number_crop = self._crop(frame_bgr, self._slot_roi(slot))
             text_crop = self._crop(frame_bgr, self._slot_text_roi(slot))
             if number_crop.size == 0 or text_crop.size == 0:
+                debug["slots"].append(
+                    {
+                        "slot": slot,
+                        "price_ocr": "",
+                        "name_ocr": "",
+                        "price_roi_bgr": None,
+                        "name_roi_bgr": None,
+                    }
+                )
                 continue
 
             price_str = self.ocr.run_ocr(context, number_crop, slot)
             name = self.ocr.run_ocr(context, text_crop, slot + 6)
+            debug["slots"].append(
+                {
+                    "slot": slot,
+                    "price_ocr": (price_str or "").strip(),
+                    "name_ocr": (name or "").strip(),
+                    "price_roi_bgr": number_crop.copy(),
+                    "name_roi_bgr": text_crop.copy(),
+                }
+            )
+
             if not name:
                 continue
 
             price = int(price_str) if price_str.isdigit() else -1
             cards.append(RecognizedCard(slot=slot, name=name, price=price))
 
+        return cards, debug
+
+    def _scan_cards(self, frame_bgr: np.ndarray, context=None) -> List[RecognizedCard]:
+        cards, _ = self._scan_cards_with_debug(frame_bgr, context=context)
         return cards
 
     def _find_hand_change_center(self, img_before: np.ndarray, img_after: np.ndarray) -> Optional[float]:
@@ -410,8 +460,10 @@ class AutoReverseEngine:
     def _perform_buy_sell(self, controller, frame_bgr: np.ndarray, slot: int) -> bool:
         """执行单张干员的买卖流程，返回是否检测到商店刷新。"""
         cfg = self._get_config()
-        shop_before = self._crop(frame_bgr, SHOP_DISPLAY_ROI)
-        hand_before = self._crop(frame_bgr, HAND_AREA_ROI)
+        shop_display_roi = ROI_TEMPLATES[cfg.ui_scale]["SHOP_DISPLAY_ROI"]
+        hand_area_roi = ROI_TEMPLATES[cfg.ui_scale]["HAND_AREA_ROI"]
+        shop_before = self._crop(frame_bgr, shop_display_roi)
+        hand_before = self._crop(frame_bgr, hand_area_roi)
         clicked_region = self._shop_region_index_from_slot(slot)
 
         click_x, click_y = self._center_of_roi(frame_bgr, self._slot_roi(slot))
@@ -420,7 +472,7 @@ class AutoReverseEngine:
         # self.log(f"操作时延{cfg.post_action_refresh_wait:g}s")
         time.sleep(cfg.post_action_refresh_wait)  # 购买后统一等待商店刷新动画
         after_buy_frame = controller.post_screencap().wait().get()
-        shop_after = self._crop(after_buy_frame, SHOP_DISPLAY_ROI)
+        shop_after = self._crop(after_buy_frame, shop_display_roi)
         hand_full_after_buy = self._is_hand_full(after_buy_frame)
 
         refreshed_buy, changed_buy, checked_buy = self.detector.eval_shop_refresh(
@@ -442,7 +494,7 @@ class AutoReverseEngine:
                 return True
 
         after_frame = after_buy_frame
-        hand_after = self._crop(after_frame, HAND_AREA_ROI)
+        hand_after = self._crop(after_frame, hand_area_roi)
         center_x = self._find_hand_change_center(hand_before, hand_after)
         if center_x is None and hand_full_after_buy:
             self.log("购买后手牌已满，继续截图检测手牌变动位置后执行售卖")
@@ -450,7 +502,7 @@ class AutoReverseEngine:
             while time.time() < deadline:
                 time.sleep(0.1)
                 after_frame = controller.post_screencap().wait().get()
-                hand_after = self._crop(after_frame, HAND_AREA_ROI)
+                hand_after = self._crop(after_frame, hand_area_roi)
                 center_x = self._find_hand_change_center(hand_before, hand_after)
                 if center_x is not None:
                     break
@@ -460,7 +512,7 @@ class AutoReverseEngine:
             return False
 
         h, w = after_frame.shape[:2]
-        hx, hy, hw, hh = HAND_AREA_ROI
+        hx, hy, hw, hh = hand_area_roi
         abs_x = int(hx * w + center_x)
         abs_y = int((hy + hh / 2.0) * h)
 
@@ -473,7 +525,7 @@ class AutoReverseEngine:
 
         # self.log(f"操作时延{cfg.post_action_refresh_wait:g}s")
         time.sleep(cfg.post_action_refresh_wait)  # 卖出后统一等待商店刷新动画
-        shop_after_sell = self._crop(controller.post_screencap().wait().get(), SHOP_DISPLAY_ROI)
+        shop_after_sell = self._crop(controller.post_screencap().wait().get(), shop_display_roi)
         refreshed_sell, changed_sell, checked_sell = self.detector.eval_shop_refresh(
             shop_after,
             shop_after_sell,
@@ -518,6 +570,37 @@ class AutoReverseEngine:
             return True
         except Exception:
             return False
+
+    def scan_once(self, controller_or_context) -> List[RecognizedCard]:
+        """执行一次稳定帧识别并返回当前商店 1-6 槽位识别结果。"""
+        context = controller_or_context if hasattr(controller_or_context, "run_recognition_direct") else None
+        controller = context.tasker.controller if context is not None else controller_or_context
+
+        cfg = self._get_config()
+        stable = self.detector.wait_for_stability(
+            capture_func=lambda: controller.post_screencap().wait().get(),
+            timeout=cfg.stable_timeout,
+            threshold=cfg.stable_threshold,
+        )
+
+        if context is not None:
+            return self._scan_cards(stable, context)
+        return self._scan_cards(stable)
+
+    def scan_once_debug(self, controller_or_context) -> Dict[str, Any]:
+        """执行一次稳定帧识别并返回 cards + 调试截图信息。"""
+        context = controller_or_context if hasattr(controller_or_context, "run_recognition_direct") else None
+        controller = context.tasker.controller if context is not None else controller_or_context
+
+        cfg = self._get_config()
+        stable = self.detector.wait_for_stability(
+            capture_func=lambda: controller.post_screencap().wait().get(),
+            timeout=cfg.stable_timeout,
+            threshold=cfg.stable_threshold,
+        )
+
+        cards, debug = self._scan_cards_with_debug(stable, context=context)
+        return {"cards": cards, "debug": debug}
 
     def tick(self, controller_or_context) -> bool:
         """自动倒转主循环：截图、识别、规划并执行动作。"""
@@ -584,11 +667,11 @@ class AutoReverseEngine:
             elif action.action_type == 1:
                 self.log(f"仅购买干员: {action.name}")
                 x, y = self._center_of_roi(stable, self._slot_roi(action.slot))
-                shop_before = self._crop(controller.post_screencap().wait().get(), SHOP_DISPLAY_ROI)
+                shop_before = self._crop(controller.post_screencap().wait().get(), ROI_TEMPLATES[cfg.ui_scale]["SHOP_DISPLAY_ROI"])
                 self._double_click(controller, x, y)
                 # self.log(f"操作时延{cfg.post_action_refresh_wait:g}s")
                 time.sleep(cfg.post_action_refresh_wait)  # 购买后统一等待商店刷新动画
-                shop_after = self._crop(controller.post_screencap().wait().get(), SHOP_DISPLAY_ROI)
+                shop_after = self._crop(controller.post_screencap().wait().get(), ROI_TEMPLATES[cfg.ui_scale]["SHOP_DISPLAY_ROI"])
                 clicked_region = self._shop_region_index_from_slot(action.slot)
                 refreshed_keep, changed_keep, checked_keep = self.detector.eval_shop_refresh(
                     shop_before,

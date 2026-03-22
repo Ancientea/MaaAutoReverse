@@ -1,9 +1,9 @@
 import json
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from maa.custom_action import CustomAction
 from maa.resource import Resource
@@ -17,12 +17,16 @@ from maa.controller import (
 )
 
 from .engine import AutoReverseConfig, AutoReverseEngine
+from .strategy import RecognizedCard
 
 
 @dataclass
 class _RuntimeState:
     engine: Optional[AutoReverseEngine] = None
     pending_pipeline_override: Optional[Dict[str, Any]] = None
+    scan_event: Optional[threading.Event] = None
+    scan_cards: List[RecognizedCard] = field(default_factory=list)
+    scan_debug: Dict[str, Any] = field(default_factory=dict)
 
 
 _RESOURCE = Resource()
@@ -46,6 +50,30 @@ class AutoReverseTickAction(CustomAction):
             return False
 
         return engine.tick(context)
+
+
+@_RESOURCE.custom_action("AutoReverseScanOnce")
+class AutoReverseScanOnceAction(CustomAction):
+    def run(self, context, argv):
+        del argv
+        with _RUNTIME_LOCK:
+            engine = _RUNTIME.engine
+            scan_event = _RUNTIME.scan_event
+
+        cards: List[RecognizedCard] = []
+        debug: Dict[str, Any] = {}
+        if engine is not None:
+            result = engine.scan_once_debug(context)
+            cards = list(result.get("cards", []))
+            debug = dict(result.get("debug", {}))
+
+        with _RUNTIME_LOCK:
+            _RUNTIME.scan_cards = cards
+            _RUNTIME.scan_debug = debug
+            if scan_event is not None:
+                scan_event.set()
+
+        return False
 
 
 class MaaAutoReverseRunner:
@@ -184,4 +212,79 @@ class MaaAutoReverseRunner:
         thread = threading.Thread(target=_watch, daemon=True)
         thread.start()
         return thread
+
+    def scan_once(
+        self,
+        config: AutoReverseConfig,
+        controller_type: str = "win32",
+        window_title: str = "",
+        bundle_path: str = "resource/autoreverse_bundle",
+        timeout: float = 6.0,
+    ) -> List[RecognizedCard]:
+        """启动一次临时任务，执行单次识别并返回识别到的卡片列表。"""
+        result = self.scan_once_debug(
+            config=config,
+            controller_type=controller_type,
+            window_title=window_title,
+            bundle_path=bundle_path,
+            timeout=timeout,
+        )
+        return list(result.get("cards", []))
+
+    def scan_once_debug(
+        self,
+        config: AutoReverseConfig,
+        controller_type: str = "win32",
+        window_title: str = "",
+        bundle_path: str = "resource/autoreverse_bundle",
+        timeout: float = 6.0,
+    ) -> Dict[str, Any]:
+        """启动一次临时任务，返回 cards + 整图/ROI 调试数据。"""
+        if self.running:
+            raise RuntimeError("runner is running")
+
+        Toolkit.init_option(str(Path.cwd()))
+        engine = AutoReverseEngine(config=config, logger=self.log)
+        engine.initialize()
+
+        controller = self._build_controller(controller_type, window_title)
+        controller.post_connection().wait()
+
+        bundle = Path(bundle_path).resolve()
+        if not bundle.exists():
+            raise FileNotFoundError(f"Bundle path not found: {bundle}")
+        if not _RESOURCE.post_bundle(str(bundle)).wait().succeeded:
+            raise RuntimeError("Failed to load bundle")
+
+        tasker = Tasker()
+        if not tasker.bind(_RESOURCE, controller):
+            raise RuntimeError("Failed to bind resource/controller")
+        if not tasker.inited:
+            raise RuntimeError("Tasker init failed")
+
+        scan_event = threading.Event()
+        with _RUNTIME_LOCK:
+            _RUNTIME.engine = engine
+            _RUNTIME.pending_pipeline_override = None
+            _RUNTIME.scan_event = scan_event
+            _RUNTIME.scan_cards = []
+            _RUNTIME.scan_debug = {}
+
+        try:
+            tasker.post_task("AutoReverseScanEntry", {})
+            scan_event.wait(timeout=max(0.5, timeout))
+            with _RUNTIME_LOCK:
+                return {
+                    "cards": list(_RUNTIME.scan_cards or []),
+                    "debug": dict(_RUNTIME.scan_debug or {}),
+                }
+        finally:
+            if tasker.running:
+                tasker.post_stop().wait()
+            with _RUNTIME_LOCK:
+                _RUNTIME.engine = None
+                _RUNTIME.pending_pipeline_override = None
+                _RUNTIME.scan_event = None
+                _RUNTIME.scan_cards = []
+                _RUNTIME.scan_debug = {}
 

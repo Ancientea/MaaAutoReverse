@@ -8,6 +8,9 @@ import ctypes
 import re
 import keyboard
 import tkinter.font as tkfont
+import threading
+import cv2
+from PIL import Image, ImageTk
 
 import maa_adapter as Buy_Sell
 
@@ -86,26 +89,6 @@ def is_admin():
     except:
         return False
 
-rois = [
-    # 索引 0-6: 数字 (1-7)
-    (0.9381, 0.7481, 0.024, 0.0342),
-
-    (0.8141, 0.7704, 0.01, 0.0232),
-    (0.6990, 0.7704, 0.01, 0.0232),
-    (0.5839, 0.7704, 0.01, 0.0232),
-    (0.4688, 0.7704, 0.01, 0.0232),
-    (0.3537, 0.7704, 0.01, 0.0232),
-    (0.2386, 0.7704, 0.01, 0.0232),
-
-    # 索引 7-12: 中文 (8-13)
-    (0.7807, 0.9556, 0.0818, 0.0250),
-    (0.6656, 0.9556, 0.0818, 0.0250),
-    (0.5505, 0.9556, 0.0818, 0.0250),
-    (0.4354, 0.9556, 0.0818, 0.0250),
-    (0.3203, 0.9556, 0.0818, 0.0250),
-    (0.2052, 0.9556, 0.0818, 0.0250),
-]
-
 class ROIProcessorApp:
     def __init__(self, root):
         self.root = root
@@ -120,7 +103,7 @@ class ROIProcessorApp:
         self.buy_only_ops = load_json_config('buy_only_operators.json', [])
 
         # 初始化 AutoTrader
-        self.auto_trader = Buy_Sell.AutoTrader(rois, None, self.log_to_status)
+        self.auto_trader = Buy_Sell.AutoTrader(None, None, self.log_to_status)
         # 使用已加载配置更新名单
         self.auto_trader.update_lists(
             self.buy_items,
@@ -129,7 +112,12 @@ class ROIProcessorApp:
             self.buy_only_ops
         )
 
-        # 顶部栏: 窗口选择
+        self.ui_scale_var = tk.IntVar(value=0) # 0 = 90%, 1 = 100%
+        # 根据当前 auto_trader 从配置文件读取的默认值初始化
+        if getattr(self.auto_trader, 'ui_scale', '90%') == '100%':
+            self.ui_scale_var.set(1)
+
+        # 顶部栏: 窗口选择与比例切换
         top_frame = tk.Frame(root)
         top_frame.pack(fill=tk.X, padx=10, pady=5)
 
@@ -141,6 +129,18 @@ class ROIProcessorApp:
 
         btn_refresh = tk.Button(top_frame, text="刷新", command=self.refresh_windows)
         btn_refresh.pack(side=tk.LEFT, padx=5)
+
+        # 界面比例切换
+        scale_frame = tk.Frame(top_frame)
+        scale_frame.pack(side=tk.LEFT, padx=20)
+        tk.Label(scale_frame, text="界面比例:").pack(side=tk.LEFT)
+        tk.Label(scale_frame, text="90%").pack(side=tk.LEFT)
+        self.scale_ui = ttk.Scale(scale_frame, from_=0, to=1, variable=self.ui_scale_var, orient=tk.HORIZONTAL, length=50, command=self.on_ui_scale_change)
+        self.scale_ui.pack(side=tk.LEFT, padx=5)
+        tk.Label(scale_frame, text="100%").pack(side=tk.LEFT)
+
+        # 如果通过点击滑块以外部分，自动取整并应用
+        self.scale_ui.bind("<ButtonRelease-1>", self.on_ui_scale_release)
 
         # 自动倒转控制区域
         ar_frame = tk.LabelFrame(root, text="自动倒转设置", padx=5, pady=5)
@@ -161,6 +161,15 @@ class ROIProcessorApp:
             height=2,
         )
         self.btn_refresh_keep.pack(side=tk.LEFT, padx=5)
+
+        self.btn_scan_test = tk.Button(
+            line1_frame,
+            text="扫描识别（测试用）",
+            command=self.on_scan_test_click,
+            bg="#dddddd",
+            height=2,
+        )
+        self.btn_scan_test.pack(side=tk.LEFT, padx=5)
 
 
 
@@ -249,6 +258,38 @@ class ROIProcessorApp:
         keyboard.add_hotkey('f8', self.safe_toggle_auto_reverse)
         keyboard.add_hotkey('f9', self.safe_toggle_refresh_keep)
 
+        # 底部折叠栏：展示单次扫描识别结果
+        self.scan_panel_expanded = False
+        bottom_frame = tk.LabelFrame(root, text="识别结果", padx=6, pady=6)
+        bottom_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        self.btn_toggle_scan_panel = tk.Button(
+            bottom_frame,
+            text="▶ 单次扫描结果（点击展开）",
+            anchor="w",
+            command=self.toggle_scan_panel,
+        )
+        self.btn_toggle_scan_panel.pack(fill=tk.X)
+
+        self.scan_panel_body = tk.Frame(bottom_frame)
+        self.txt_scan_result = tk.Text(self.scan_panel_body, height=4, width=120)
+        self.txt_scan_result.pack(fill=tk.X)
+        self.txt_scan_result.insert("1.0", "暂无识别结果")
+        self.txt_scan_result.config(state=tk.DISABLED)
+
+        # 调试图文滚动区（整图 + 各槽位 ROI）
+        self.scan_photo_refs = []
+        self.scan_canvas = tk.Canvas(self.scan_panel_body, height=340)
+        self.scan_scrollbar = tk.Scrollbar(self.scan_panel_body, orient="vertical", command=self.scan_canvas.yview)
+        self.scan_canvas.configure(yscrollcommand=self.scan_scrollbar.set)
+        self.scan_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.scan_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=(6, 0))
+
+        self.scan_content_frame = tk.Frame(self.scan_canvas)
+        self.scan_canvas_window = self.scan_canvas.create_window((0, 0), window=self.scan_content_frame, anchor="nw")
+        self.scan_content_frame.bind("<Configure>", self._on_scan_content_configure)
+        self.scan_canvas.bind("<Configure>", self._on_scan_canvas_configure)
+
     # 本地 OCR 初始化已移除，OCR 由 Maa AutoReverse 引擎内部处理。
 
     def log_to_status(self, msg):
@@ -279,6 +320,23 @@ class ROIProcessorApp:
 
         # 触发后台更新
         self.update_autotrader_from_gui()
+
+    def on_ui_scale_change(self, event=None):
+        """处理滑块拖动中，只允许取整 0 或 1"""
+        val = int(round(self.ui_scale_var.get()))
+        # 如果 ttk.Scale 自己通过鼠标滑动赋值可能是浮点数，强制绑定更新并通知后台
+        if val == 0:
+            self.auto_trader.set_ui_scale("90%")
+        else:
+            self.auto_trader.set_ui_scale("100%")
+
+    def on_ui_scale_release(self, event=None):
+        val = int(round(self.ui_scale_var.get()))
+        self.ui_scale_var.set(val)
+        if val == 0:
+            self.auto_trader.set_ui_scale("90%")
+        else:
+            self.auto_trader.set_ui_scale("100%")
 
     def on_buy_only_checkbox_click(self, val):
         """当预设保留干员复选框被点击时，更新保留干员文本框内容"""
@@ -315,6 +373,149 @@ class ROIProcessorApp:
     def safe_toggle_refresh_keep(self):
         """F9 热键的线程安全封装"""
         self.root.after(0, self.toggle_refresh_keep_mode)
+
+    def toggle_scan_panel(self):
+        self.scan_panel_expanded = not self.scan_panel_expanded
+        if self.scan_panel_expanded:
+            self.btn_toggle_scan_panel.config(text="▼ 单次扫描结果（点击折叠）")
+            self.scan_panel_body.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
+        else:
+            self.btn_toggle_scan_panel.config(text="▶ 单次扫描结果（点击展开）")
+            self.scan_panel_body.pack_forget()
+
+    def _set_scan_result_text(self, lines):
+        text = "\n".join(lines) if lines else "本次未识别到有效结果"
+        self.txt_scan_result.config(state=tk.NORMAL)
+        self.txt_scan_result.delete("1.0", "end")
+        self.txt_scan_result.insert("1.0", text)
+        self.txt_scan_result.config(state=tk.DISABLED)
+
+    def _on_scan_content_configure(self, _event):
+        self.scan_canvas.configure(scrollregion=self.scan_canvas.bbox("all"))
+
+    def _on_scan_canvas_configure(self, event):
+        self.scan_canvas.itemconfigure(self.scan_canvas_window, width=event.width)
+
+    def _clear_scan_debug_widgets(self):
+        for child in self.scan_content_frame.winfo_children():
+            child.destroy()
+        self.scan_photo_refs = []
+
+    def _build_photo(self, bgr_img, max_width=440, max_height=220):
+        if bgr_img is None:
+            return None
+        if not hasattr(bgr_img, "shape"):
+            return None
+        if bgr_img.size == 0:
+            return None
+
+        rgb = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb)
+        resampling = getattr(Image, "Resampling", Image)
+        lanczos = getattr(resampling, "LANCZOS", Image.LANCZOS)
+        pil_img.thumbnail((max_width, max_height), lanczos)
+        return ImageTk.PhotoImage(pil_img)
+
+    def _render_scan_debug(self, debug_data):
+        self._clear_scan_debug_widgets()
+        if not isinstance(debug_data, dict):
+            return
+
+        frame_bgr = debug_data.get("frame_bgr")
+        slots = debug_data.get("slots", []) or []
+
+        header = tk.Label(self.scan_content_frame, text="整张截图", anchor="w", font=("Microsoft YaHei UI", 10, "bold"))
+        header.pack(fill=tk.X, pady=(0, 4))
+
+        frame_photo = self._build_photo(frame_bgr, max_width=900, max_height=360)
+        if frame_photo is not None:
+            self.scan_photo_refs.append(frame_photo)
+            tk.Label(self.scan_content_frame, image=frame_photo, anchor="w").pack(fill=tk.X, pady=(0, 8))
+        else:
+            tk.Label(self.scan_content_frame, text="整图不可用", fg="#666666", anchor="w").pack(fill=tk.X, pady=(0, 8))
+
+        tk.Label(self.scan_content_frame, text="各扫描区域与识别结果", anchor="w", font=("Microsoft YaHei UI", 10, "bold")).pack(fill=tk.X)
+
+        for slot_item in slots:
+            slot = slot_item.get("slot", "?")
+            block = tk.LabelFrame(self.scan_content_frame, text=f"槽位 {slot}", padx=6, pady=6)
+            block.pack(fill=tk.X, pady=6)
+
+            ocr_text = f"价格OCR: {slot_item.get('price_ocr', '') or '(空)'}    名称OCR: {slot_item.get('name_ocr', '') or '(空)'}"
+            tk.Label(block, text=ocr_text, anchor="w", justify="left").pack(fill=tk.X, pady=(0, 6))
+
+            imgs_frame = tk.Frame(block)
+            imgs_frame.pack(fill=tk.X)
+
+            price_photo = self._build_photo(slot_item.get("price_roi_bgr"), max_width=260, max_height=120)
+            name_photo = self._build_photo(slot_item.get("name_roi_bgr"), max_width=420, max_height=120)
+
+            left = tk.Frame(imgs_frame)
+            left.pack(side=tk.LEFT, padx=(0, 8))
+            tk.Label(left, text="费用区域", anchor="w").pack(fill=tk.X)
+            if price_photo is not None:
+                self.scan_photo_refs.append(price_photo)
+                tk.Label(left, image=price_photo).pack()
+            else:
+                tk.Label(left, text="无截图", fg="#666666").pack()
+
+            right = tk.Frame(imgs_frame)
+            right.pack(side=tk.LEFT)
+            tk.Label(right, text="名称区域", anchor="w").pack(fill=tk.X)
+            if name_photo is not None:
+                self.scan_photo_refs.append(name_photo)
+                tk.Label(right, image=name_photo).pack()
+            else:
+                tk.Label(right, text="无截图", fg="#666666").pack()
+
+    def on_scan_test_click(self):
+        if self.auto_trader.running:
+            messagebox.showinfo("提示", "请先停止 F8/F9 运行，再进行测试扫描。")
+            return
+
+        target_title = self.window_combo.get().strip()
+        if not target_title:
+            messagebox.showerror("错误", "请先选择一个窗口。")
+            return
+
+        self.update_autotrader_from_gui()
+        self.btn_scan_test.config(state=tk.DISABLED)
+        self.update_status("正在执行单次扫描识别...", error=False)
+
+        worker = threading.Thread(target=self._run_scan_once_worker, args=(target_title,), daemon=True)
+        worker.start()
+
+    def _run_scan_once_worker(self, target_title):
+        try:
+            scan_result = self.auto_trader.scan_once_debug(target_title)
+            cards = list(scan_result.get("cards", []))
+            debug_data = scan_result.get("debug", {})
+            lines = []
+            for card in cards:
+                price_text = str(card.price) if card.price >= 0 else "?"
+                lines.append(f"槽位{card.slot} | 费用: {price_text} | 干员: {card.name}")
+
+            def _ok():
+                if not self.scan_panel_expanded:
+                    self.toggle_scan_panel()
+                self._set_scan_result_text(lines)
+                self._render_scan_debug(debug_data)
+                if lines:
+                    self.update_status(f"扫描完成，共识别 {len(lines)} 条", error=False)
+                else:
+                    self.update_status("扫描完成，未识别到可用干员", error=False)
+                self.btn_scan_test.config(state=tk.NORMAL)
+
+            self.root.after(0, _ok)
+        except Exception as e:
+            def _err():
+                if not self.scan_panel_expanded:
+                    self.toggle_scan_panel()
+                self._set_scan_result_text([f"扫描失败: {e}"])
+                self._clear_scan_debug_widgets()
+                self.update_status(f"扫描失败: {e}", error=True)
+                self.btn_scan_test.config(state=tk.NORMAL)
+            self.root.after(0, _err)
 
     def toggle_auto_reverse(self):
         try:
@@ -371,6 +572,7 @@ class ROIProcessorApp:
             self.auto_trader.set_window(title)
             self.auto_trader.set_refresh_keep_mode(refresh_keep_mode)
             self.auto_trader.start()
+            self.btn_scan_test.config(state=tk.DISABLED)
             if refresh_keep_mode:
                 self.btn_refresh_keep.config(text="停止刷新保留 (F9)", bg="#ffcccc")
                 self.btn_auto_reverse.config(bg="#dddddd")
@@ -388,6 +590,7 @@ class ROIProcessorApp:
             self.auto_trader.stop()
             self.btn_auto_reverse.config(text="启动自动倒转 (F8)", bg="#dddddd")
             self.btn_refresh_keep.config(text="干员道具刷新保留 (F9)", bg="#dddddd")
+            self.btn_scan_test.config(state=tk.NORMAL)
             self.update_status("自动倒转已停止", error=False)
         except Exception as e:
             self.update_status(f"停止失败: {e}", error=True)

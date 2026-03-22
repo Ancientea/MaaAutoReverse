@@ -3,7 +3,7 @@ import sys
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 # 当前文件位于 MaaAutoReverse 根目录。
 repo_root = Path(__file__).resolve().parent
@@ -14,6 +14,7 @@ if str(repo_root) not in sys.path:
 os.environ.setdefault("MAAFW_BINARY_PATH", str(repo_root / "runtime" / "bin"))
 
 from autoreverse.engine import AutoReverseConfig
+from autoreverse.strategy import RecognizedCard
 from autoreverse.runner import MaaAutoReverseRunner
 
 
@@ -33,6 +34,7 @@ class AutoTrader:
         self.operator_list: List[str] = []
         self.buy_only_operator_list: List[str] = []
         self.six_star_list: List[str] = []
+        self.ui_scale: str = "90%"
 
         self._runtime_options = self._load_runtime_options()
     @staticmethod
@@ -52,6 +54,7 @@ class AutoTrader:
             "stable_timeout": 2.0,
             "post_action_refresh_wait": 0.4,
             "sell_click_wait": 0.03,
+            "ui_scale": "90%",
         }
         if not cfg_path.exists():
             return defaults
@@ -76,6 +79,7 @@ class AutoTrader:
                     opts[key] = float(data[key])
                 except Exception:
                     pass
+        opts["ui_scale"] = data.get("ui_scale", defaults["ui_scale"])
         return opts
 
     @property
@@ -101,6 +105,13 @@ class AutoTrader:
         self.log(f"运行模式: {'刷新保留' if self.refresh_keep_mode else '自动倒转'}")
         if self.running:
             self._runner.update_config(self._build_config())
+
+    def set_ui_scale(self, scale: str):
+        if scale in ("90%", "100%"):
+            self.ui_scale = scale
+            self.log(f"设置 UI 比例为: {scale}")
+            if self.running:
+                self._runner.update_config(self._build_config())
 
     def update_lists(
         self,
@@ -138,6 +149,7 @@ class AutoTrader:
             post_action_refresh_wait=self._runtime_options["post_action_refresh_wait"],
             sell_click_wait=self._runtime_options["sell_click_wait"],
             refresh_keep_mode=self.refresh_keep_mode,
+            ui_scale=self.ui_scale,
         )
 
     def start(self):
@@ -156,3 +168,23 @@ class AutoTrader:
     def stop(self):
         self._runner.stop()
         self.log("自动倒转已停止")
+
+    def scan_once(self, window_title: Optional[str] = None) -> List[RecognizedCard]:
+        result = self.scan_once_debug(window_title)
+        return list(result.get("cards", []))
+
+    def scan_once_debug(self, window_title: Optional[str] = None) -> Dict[str, Any]:
+        if self.running:
+            raise RuntimeError("自动倒转运行中，请先停止后再测试扫描")
+
+        title = (window_title or self.target_window_title or "").strip()
+        if not title:
+            raise ValueError("请先选择窗口")
+
+        return self._runner.scan_once_debug(
+            config=self._build_config(),
+            controller_type="win32",
+            window_title=title,
+            bundle_path=str(repo_root / "resource" / "autoreverse_bundle"),
+        )
+
