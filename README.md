@@ -69,7 +69,7 @@ python gui_app.py
 - `buy_items.json`：**保留道具名单**（遇到这些道具会直接买下囤积）
 - `buy_only_operators.json`：**保留干员名单**（遇到这些干员会买下囤积）
 - `buy_sell_operators.json`：**倒转干员名单**（遇到这些干员会执行：买入 -> 卖出 赚取一费差价）
-- `six_star_operators.json`：**不处理干员名单**（不会购买这些干员，防亏本）
+- `six_star_operators.json`：**不处理干员名单**（不会购买这些干员/道具）
 - `predefined_items.json`：**预设道具列表**（用于构造控制界面下方的快捷勾选框）
 - `predefined_buy_only_operators.json`：**预设保留干员列表**（控制界面快捷勾选框的数据集）
 - `maa_option.json`：**GUI 本地运行选项**（记录你上次选择的游戏窗口句柄等本地状态）
@@ -85,6 +85,16 @@ python gui_app.py
 - `"double_click_interval"`: **鼠标双击购买商品时，两次点击之间** 的连点发包间隔时间（秒）。
 - `"stable_poll_interval"`: **发起各种轮询截图的时间间隔**。默认 0.1 表示每 0.1 秒向游戏截图并比对一次是否刷新/静止。
 - `"action_interval"`: **执行两组相互独立的连续组合动作时相隔的休息时间**（秒）。防由于指令过密导致连击断触。
+
+### 3. 性能与稳定性配置 (`performance_config.json`)
+此文件用于精细控制图像识别的灵敏度与稳定性，以适应不同电脑配置和网络环境。
+- `"change_threshold"`: **省流防沉睡阈值**。截取两张图片画面对比时的容差。大于该容差表示有变化需要扫描分析。如果小则证明画面未变化（比如未按刷新），跳过本轮以节省性能。
+- `"shop_refresh_change_threshold"`: **各商品格刷新判定阈值**。买完卡后，未购买的卡槽位发生的变更幅度，超过该阈值被判定为发生了一切大刷新。
+- `"stable_threshold"`: **画面静止稳定判定**。当刚按下刷新或购买等指令时，容错多大区别内的画面闪烁会被认为“画面已安静无动画”。
+- `"stable_timeout"`: 倒转长时间未响应，减小该值
+- `"post_action_refresh_wait"`: 如果发现**买单张卡牌后，错误的卖掉了其他的干员**，可以尝试增大该值。
+- `"double_click_interval"`: 如果发现**双击后没有买到干员**，可以尝试增大该值。
+- `"action_interval"`: 买卖完一个干员后，进行下次操作的时间间隔
 
 ## 目录结构（核心）
 
