@@ -89,6 +89,7 @@ class AutoReverseConfig:
     post_action_refresh_wait: float = 3
     sell_click_wait: float = 0.03
     refresh_keep_mode: bool = False
+    auto_reverse_auto_refresh: bool = False
     ui_scale: str = "90%"
     double_click_interval: float = 0.01
     stable_poll_interval: float = 0.1
@@ -110,6 +111,7 @@ class AutoReverseConfig:
             post_action_refresh_wait=float(data.get("post_action_refresh_wait", 1)),
             sell_click_wait=float(data.get("sell_click_wait", 0.03)),
             refresh_keep_mode=bool(data.get("refresh_keep_mode", False)),
+            auto_reverse_auto_refresh=bool(data.get("auto_reverse_auto_refresh", False)),
             ui_scale=data.get("ui_scale", "90%"),
             double_click_interval=float(data.get("double_click_interval", 0.01)),
             stable_poll_interval=float(data.get("stable_poll_interval", 0.1)),
@@ -273,6 +275,18 @@ class PriceOCR:
                 )
 
             if is_number:
+                # 针对数字进行常见的 OCR 视觉纠错（防止价格 0 被识别成字母 O）
+                correction = {
+                    'O': '0', 'o': '0', 'Q': '0', 'D': '0',
+                    'I': '1', 'l': '1', 'i': '1',
+                    'Z': '2', 'z': '2',
+                    'S': '5', 's': '5',
+                    'B': '8',
+                    'b': '6',
+                    'g': '9', 'q': '9'
+                }
+                for k, v in correction.items():
+                    text = text.replace(k, v)
                 return "".join([c for c in text if c.isdigit()])
 
             return text.strip()
@@ -427,7 +441,7 @@ class AutoReverseEngine:
         cards, _ = self._scan_cards_with_debug(frame_bgr, context=context)
         return cards
 
-    def _find_hand_change_center(self, img_before: np.ndarray, img_after: np.ndarray) -> Optional[float]:
+    def _find_hand_change_center_old(self, img_before: np.ndarray, img_after: np.ndarray) -> Optional[float]:
         if img_before is None or img_after is None:
             return None
         if img_before.shape != img_after.shape:
@@ -439,7 +453,8 @@ class AutoReverseEngine:
 
         num_slots = 10
         slot_width = w_roi / float(num_slots)
-        blur_ksize = (5, 5) 
+        blur_ksize = (5, 5) #卷积核可以过滤掉轻微的噪点
+
         max_score = 0
         max_idx = -1
         for i in range(num_slots):
@@ -456,7 +471,7 @@ class AutoReverseEngine:
                 max_score = score
                 max_idx = i
 
-        if max_idx == -1 or max_score <= 200:
+        if max_idx == -1 or max_score <= 70:
             return None
 
         xs = int(max_idx * slot_width)
@@ -475,60 +490,106 @@ class AutoReverseEngine:
 
         num_slots = 10
         slot_width = w_roi / float(num_slots)
-        blur_ksize = (5, 5) # 你正在不断测试的卷积核大小
-        color_threshold = 70 # 你刚才设定的色差阈值
-        score_threshold = 200 # 有效变动像素量及格线
+        
+        # 这个及格线代表RGB各通道(均值偏移+标准差偏移)的总和，你可以看图去调
+        # 大部分的待机动画可能只会产生很小的总偏移(<5.0)，新干员则是爆炸级的数字
+        change_threshold = 5.0 
 
-        # 对一整张手牌区图片进行统一步骤
-        blurred_before = cv2.GaussianBlur(img_before, blur_ksize, 0)
-        blurred_after = cv2.GaussianBlur(img_after, blur_ksize, 0)
-        
-        diff = cv2.absdiff(blurred_before, blurred_after)
-        gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-        _, th = cv2.threshold(gray, color_threshold, 255, cv2.THRESH_BINARY)
-        
-        scores = []
-        max_score = 0
+        scores_t = []
+        max_t = 0
         max_idx = -1
         
-        # 将黑白阈值图转回BGR，方便我们在上面画绿色的格子和红色的数字
-        debug_th = cv2.cvtColor(th, cv2.COLOR_GRAY2BGR)
+        # 调试画板
+        debug_canvas = img_after.copy()
         
         for i in range(num_slots):
             xs = int(i * slot_width)
             xe = int((i + 1) * slot_width) if i < num_slots - 1 else w_roi
             
-            # 从整图中截取出这一列去计算非0像素数量
-            slice_th = th[:, xs:xe]
-            score = cv2.countNonZero(slice_th)
-            scores.append(score)
-            if score > max_score:
-                max_score = score
+            # 截取包含 BGR 三通道的原图切片
+            slice_before = img_before[:, xs:xe]
+            slice_after = img_after[:, xs:xe]
+            
+            # mean_b/std_b 是形如 [[B], [G], [R]] 的多维数组
+            mean_b, std_b = cv2.meanStdDev(slice_before)
+            mean_a, std_a = cv2.meanStdDev(slice_after)
+            
+            # 分别计算 B,G,R 三个通道在 "均值" 和 "标准差(方差的平方根)" 上的绝对偏移量之和
+            mean_diff = float(np.sum(np.abs(mean_a - mean_b)))
+            std_diff = float(np.sum(np.abs(std_a - std_b)))
+            
+            # 综合判定分：综合均值偏移和方差偏移
+            score_t = mean_diff + std_diff
+            scores_t.append(score_t)
+            
+            if score_t > max_t:
+                max_t = score_t
                 max_idx = i
                 
-            # 在调试图上画出边界线和写上分数
-            cv2.rectangle(debug_th, (xs, 0), (xe, h_roi), (0, 255, 0), 1)
-            cv2.putText(debug_th, str(score), (xs + 2, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            # 在调试图上画格子和3个数字打分
+            cv2.rectangle(debug_canvas, (xs, 0), (xe, h_roi), (0, 255, 0), 1)
+            cv2.putText(debug_canvas, f"M:{mean_diff:.1f}", (xs + 2, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
+            cv2.putText(debug_canvas, f"V:{std_diff:.1f}", (xs + 2, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
+            cv2.putText(debug_canvas, f"T:{score_t:.1f}", (xs + 2, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
 
-        self.log(f"【调试】10个区域计算出的有效变动像素量(Score): {scores}")
+        self.log(f"【调试】10区域 RGB 方差+均值 综合变动率(T): {[round(x,1) for x in scores_t]}")
 
-        # 拼图展示给用户看 (3行2列)
-        # 提示用户这些步骤分别长什么样子
-        # 第一排: 购买前的原图 vs 购买后的原图
+        # 拼图展示给用户看 (2行1列即可，因为原图包含了所有信息)
         row1 = np.hstack((img_before, img_after))
-        # 第二排: 高斯模糊处理后的两张图
-        row2 = np.hstack((blurred_before, blurred_after))
-        # 第三排: 这两者的相减图(AbsDiff) vs 得分最高列统计出来的黑白阈值图
-        row3 = np.hstack((diff, debug_th))
+        black_canvas = np.zeros_like(img_before)
+        cv2.putText(black_canvas, "Check Right Side --->", (50, int(h_roi/2)), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+        row2 = np.hstack((black_canvas, debug_canvas))
         
-        # 把三行合成一张巨大的画布
-        canvas = np.vstack((row1, row2, row3))
+        canvas = np.vstack((row1, row2))
         
-        cv2.imshow(f"Hand Area Debug | Threshold: {color_threshold} | Press ANY KEY to continue", canvas)
-        cv2.waitKey(0) # 0 代表一直暂停死等，直到你在图片窗口按任意键
+        cv2.imshow(f"RGB Variance Debug | Best Slot: {max_idx} | Press ANY KEY to continue", canvas)
+        cv2.waitKey(0) # 0 代表一直暂停死等
         cv2.destroyAllWindows()
 
-        if max_idx == -1 or max_score <= score_threshold:
+        if max_idx == -1 or max_t <= change_threshold:
+            return None
+
+        xs = int(max_idx * slot_width)
+        xe = int((max_idx + 1) * slot_width) if max_idx < num_slots - 1 else w_roi
+        return xs + (xe - xs) / 2.0
+
+    def _find_hand_change_center(self, img_before: np.ndarray, img_after: np.ndarray) -> Optional[float]:
+        if img_before is None or img_after is None:
+            return None
+        if img_before.shape != img_after.shape:
+            img_before = cv2.resize(img_before, (img_after.shape[1], img_after.shape[0]))
+
+        h_roi, w_roi = img_after.shape[:2]
+        if h_roi == 0 or w_roi == 0:
+            return None
+
+        num_slots = 10
+        slot_width = w_roi / float(num_slots)
+        change_threshold = 5.0 
+
+        max_t = 0
+        max_idx = -1
+        
+        for i in range(num_slots):
+            xs = int(i * slot_width)
+            xe = int((i + 1) * slot_width) if i < num_slots - 1 else w_roi
+            
+            slice_before = img_before[:, xs:xe]
+            slice_after = img_after[:, xs:xe]
+            
+            mean_b, std_b = cv2.meanStdDev(slice_before)
+            mean_a, std_a = cv2.meanStdDev(slice_after)
+            
+            mean_diff = float(np.sum(np.abs(mean_a - mean_b)))
+            std_diff = float(np.sum(np.abs(std_a - std_b)))
+            
+            score_t = mean_diff + std_diff
+            
+            if score_t > max_t:
+                max_t = score_t
+                max_idx = i
+
+        if max_idx == -1 or max_t <= change_threshold:
             return None
 
         xs = int(max_idx * slot_width)
@@ -561,17 +622,19 @@ class AutoReverseEngine:
             excluded_region=clicked_region,
             region_change_threshold=cfg.shop_refresh_change_threshold,
         )
+        if hand_full_after_buy and refreshed_buy:
+            self.log("购买后手牌区满，UI大面积置灰产生的巨大颜色差值被强制拦截为假刷新")
+            refreshed_buy = False
+
         self.log(
             "购买后刷新检查: "
             f"商品{slot}号, 商店改变{changed_buy}/{checked_buy}, "
             f"商店是否刷新={refreshed_buy}"
         )
         if refreshed_buy:
-            if hand_full_after_buy:
-                self.log("只剩一格空位了，注意手牌管理")
-            else:
-                self.log("商店刷新")
-                return True
+            # 无论商店是否刷新，我们都必须贯彻执行当前的套现动作（把刚买的卡卖掉）！
+            # 否则如果这里直接 return True 中断，会导致买进来的干员烂在手里
+            self.log("购买后触发了商店刷新，程序将优先完成本次售卖套现")
 
         after_frame = after_buy_frame
         hand_after = self._crop(after_frame, hand_area_roi)
@@ -589,43 +652,62 @@ class AutoReverseEngine:
 
         if center_x is None:
             self.log("未检测到手牌变化")
-            return False
+            return refreshed_buy # 没法卖，但如果购买时刷新了必须报告刷新
 
         h, w = after_frame.shape[:2]
         hx, hy, hw, hh = hand_area_roi
         abs_x = int(hx * w + center_x)
         abs_y = int((hy + hh) * h)
 
-        controller.post_click(abs_x, abs_y).wait()
-        time.sleep(cfg.sell_click_wait)  # 选中待售卡片后等待输入焦点稳定
+        max_sell_retries = 3
+        for attempt in range(max_sell_retries):
+            controller.post_click(abs_x, abs_y).wait()
+            time.sleep(cfg.sell_click_wait)  # 选中待售卡片后等待输入焦点稳定
 
-        key_sent = self._send_sell_key_x(controller)
-        if not key_sent:
-            return False
+            key_sent = self._send_sell_key_x(controller)
+            if not key_sent:
+                return refreshed_buy
 
-        # self.log(f"操作时延{cfg.post_action_refresh_wait:g}s")
-        time.sleep(cfg.post_action_refresh_wait)  # 卖出后统一等待商店刷新动画
+            time.sleep(cfg.post_action_refresh_wait)  # 卖出后统一等待商店刷新动画
 
-        after_sell_frame = controller.post_screencap().wait().get()
+            after_sell_frame = controller.post_screencap().wait().get()
+            hand_full_after_sell = self._is_hand_full(after_sell_frame)
+            
+            if not hand_full_after_sell:
+                break
+                
+            if attempt < max_sell_retries - 1:
+                self.log(f"售卖重试 {attempt+1}/{max_sell_retries}: 售卖后手牌仍然满载，漏键检测生效，再次对该坐标尝试出售...")
+
         shop_after_sell = self._crop(after_sell_frame, shop_display_roi)
-        hand_full_after_sell = self._is_hand_full(after_sell_frame)
+        
+        # 修正对比基准：如果购买时手牌满（UI置灰暗色），卖出后又会变亮，如果拿暗的去对比必然又会爆发假刷新，因此换回原始基准
+        baseline_shop = shop_before if hand_full_after_buy else shop_after
         refreshed_sell, changed_sell, checked_sell = self.detector.eval_shop_refresh(
-            shop_after,
+            baseline_shop,
             shop_after_sell,
             excluded_region=clicked_region,
             region_change_threshold=cfg.shop_refresh_change_threshold,
         )
+        if hand_full_after_sell and refreshed_sell:
+            self.log("售卖操作结束仍满载（假装卖掉了实际上是UI置灰发红），强制重置为假刷新")
+            refreshed_sell = False
+
         self.log(
             "售卖后刷新检查: "
             f"商品{slot}号, 商店改变{changed_sell}/{checked_sell}, "
             f"商店是否刷新={refreshed_sell}, "
             f"售卖后手牌区是否满={hand_full_after_sell}"
         )
-        if refreshed_sell:
-            if hand_full_after_sell:
-                self.log("售卖后检测到手牌区已满，请注意手牌管理")
-                return False
-            self.log("售卖后检测到商店刷新")
+        
+        # 只要购买时或售卖时发生了刷新，最终必须报告给外层重新扫描商店
+        final_refresh_state = refreshed_buy or refreshed_sell
+        
+        if hand_full_after_sell:
+            self.log("所有售卖重试结束，手牌区仍满载，请人工留意")
+
+        if final_refresh_state:
+            self.log("操作期间检测到商店刷新，即将重新扫描")
             return True
 
         return False
@@ -742,6 +824,11 @@ class AutoReverseEngine:
                 if self._send_refresh_key_d(controller):
                     self.last_shop_img = None
                     return True
+            elif cfg.auto_reverse_auto_refresh:
+                self.log("倒转自动刷新：本轮无可操作目标，按 D 刷新商店")
+                if self._send_refresh_key_d(controller):
+                    self.last_shop_img = None
+                    return True
             self.last_shop_img = stable
             return True
 
@@ -767,6 +854,10 @@ class AutoReverseEngine:
                     excluded_region=clicked_region,
                     region_change_threshold=cfg.shop_refresh_change_threshold,
                 )
+                if self._is_hand_full(after_buy_frame) and refreshed_keep:
+                    self.log("购买保留类干员后手牌区已满导致的UI大幅置灰异常，已被过滤为假刷新")
+                    refreshed_keep = False
+                    
                 self.log(
                     "仅购买后刷新检查: "
                     f"slot={action.slot}, excluded={clicked_region}, changed={changed_keep}/{checked_keep}, "
@@ -791,6 +882,11 @@ class AutoReverseEngine:
 
         if cfg.refresh_keep_mode:
             self.log("刷新保留模式：本轮购买完成，按 D 刷新商店")
+            if self._send_refresh_key_d(controller):
+                self.last_shop_img = None
+                return True
+        elif cfg.auto_reverse_auto_refresh:
+            self.log("倒转自动刷新：本轮操作完成，按 D 刷新商店")
             if self._send_refresh_key_d(controller):
                 self.last_shop_img = None
                 return True

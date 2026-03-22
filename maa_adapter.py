@@ -27,6 +27,7 @@ class AutoTrader:
         self._log_callback = log_callback
         self.target_window_title = ""
         self.refresh_keep_mode = False
+        self.auto_reverse_auto_refresh = False
         self._runner = MaaAutoReverseRunner(logger=self.log)
         self._log_file = self._init_log_file()
 
@@ -160,6 +161,7 @@ class AutoTrader:
             post_action_refresh_wait=self._runtime_options["post_action_refresh_wait"],
             sell_click_wait=self._runtime_options["sell_click_wait"],
             refresh_keep_mode=self.refresh_keep_mode,
+            auto_reverse_auto_refresh=self.auto_reverse_auto_refresh,
             ui_scale=self.ui_scale,
             double_click_interval=self._runtime_options["double_click_interval"],
             stable_poll_interval=self._runtime_options["stable_poll_interval"],

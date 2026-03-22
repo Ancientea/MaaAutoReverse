@@ -171,6 +171,15 @@ class ROIProcessorApp:
         )
         self.btn_scan_test.pack(side=tk.LEFT, padx=5)
 
+        # 倒转自动刷新复选框
+        self.auto_refresh_var = tk.BooleanVar(value=False)
+        self.chk_auto_refresh = tk.Checkbutton(
+            line1_frame,
+            text="倒转自动刷新 (可能不稳定有bug)",
+            variable=self.auto_refresh_var,
+            command=self.on_auto_refresh_toggle,
+        )
+        self.chk_auto_refresh.pack(side=tk.LEFT, padx=10)
 
 
         # 第 2 行：名单配置（使用多行文本框）
@@ -532,10 +541,19 @@ class ROIProcessorApp:
             else:
                 # 启动前先同步名单
                 self.update_autotrader_from_gui()
+                self.auto_trader.auto_reverse_auto_refresh = self.auto_refresh_var.get()
                 self.start_auto_reverse(target_title, refresh_keep_mode=False)
         except Exception as e:
             self.update_status(f"切换自动倒转失败: {e}", error=True)
             messagebox.showerror("自动倒转错误", str(e))
+
+    def on_auto_refresh_toggle(self):
+        enabled = self.auto_refresh_var.get()
+        self.auto_trader.auto_reverse_auto_refresh = enabled
+        state_text = "已开启" if enabled else "已关闭"
+        self.log_to_status(f"倒转自动刷新: {state_text}")
+        if self.auto_trader.running:
+            self.auto_trader._runner.update_config(self.auto_trader._build_config())
 
     def toggle_refresh_keep_mode(self):
         try:
