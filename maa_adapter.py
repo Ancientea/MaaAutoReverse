@@ -107,7 +107,7 @@ class AutoTrader:
             self._runner.update_config(self._build_config())
 
     def set_ui_scale(self, scale: str):
-        if scale in ("90%", "100%"):
+        if scale in ("90%", "100%") and self.ui_scale != scale:
             self.ui_scale = scale
             self.log(f"设置 UI 比例为: {scale}")
             if self.running:

@@ -55,12 +55,12 @@ ROI_TEMPLATES = {
     "100%": {
         "ROIS": [
             (0.9313, 0.7204, 0.0266, 0.0370),
-            (0.7927, 0.7444, 0.0115, 0.0269),
-            (0.6650, 0.7444, 0.0115, 0.0269),
-            (0.5373, 0.7444, 0.0115, 0.0269),
-            (0.4095, 0.7444, 0.0115, 0.0269),
-            (0.2818, 0.7444, 0.0115, 0.0269),
-            (0.1541, 0.7444, 0.0115, 0.0269),
+            (0.7927, 0.7444, 0.0120, 0.0269),
+            (0.6650, 0.7444, 0.0120, 0.0269),
+            (0.5373, 0.7444, 0.0120, 0.0269),
+            (0.4095, 0.7444, 0.0120, 0.0269),
+            (0.2818, 0.7444, 0.0120, 0.0269),
+            (0.1541, 0.7444, 0.0120, 0.0269),
             (0.7568, 0.9500, 0.0896, 0.0296),
             (0.6289, 0.9500, 0.0896, 0.0296),
             (0.5010, 0.9500, 0.0896, 0.0296),
@@ -457,11 +457,13 @@ class AutoReverseEngine:
         xe = int((max_idx + 1) * slot_width) if max_idx < num_slots - 1 else w_roi
         return xs + (xe - xs) / 2.0
 
-    def _perform_buy_sell(self, controller, frame_bgr: np.ndarray, slot: int) -> bool:
+    def _perform_buy_sell(self, controller, slot: int) -> bool:
         """执行单张干员的买卖流程，返回是否检测到商店刷新。"""
         cfg = self._get_config()
         shop_display_roi = ROI_TEMPLATES[cfg.ui_scale]["SHOP_DISPLAY_ROI"]
         hand_area_roi = ROI_TEMPLATES[cfg.ui_scale]["HAND_AREA_ROI"]
+        
+        frame_bgr = controller.post_screencap().wait().get()
         shop_before = self._crop(frame_bgr, shop_display_roi)
         hand_before = self._crop(frame_bgr, hand_area_roi)
         clicked_region = self._shop_region_index_from_slot(slot)
@@ -690,7 +692,7 @@ class AutoReverseEngine:
                     break
             else:
                 self.log(f"买卖干员: {action.name}")
-                if self._perform_buy_sell(controller, stable, action.slot):
+                if self._perform_buy_sell(controller, action.slot):
                     refresh_triggered = True
                     break
 

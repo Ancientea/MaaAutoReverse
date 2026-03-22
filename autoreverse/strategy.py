@@ -105,7 +105,7 @@ def plan_actions(
     actions: List[PlannedAction] = []
 
     for card in cards:
-        if card.price < 0 or not card.name.strip():
+        if not card.name.strip():
             continue
 
         action_type = classify_action(
